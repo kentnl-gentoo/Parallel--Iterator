@@ -1,4 +1,4 @@
-# $Id: 020-data.t 2676 2007-10-03 17:38:27Z andy $
+# $Id: 020-data.t 2679 2007-10-03 21:08:48Z andy $
 use strict;
 use warnings;
 use Test::More tests => 1;
@@ -13,7 +13,7 @@ use Parallel::Iterator qw( iterate_as_array );
         [ 1, 2, 3 ],
         "Hello"
     );
-    
+
     my @want = (
         {
             type  => 'hash',
@@ -22,9 +22,9 @@ use Parallel::Iterator qw( iterate_as_array );
         [ 4, 5, 6, 7, 8, 9 ],
         "HelloHello"
     );
-    
+
     my @got = iterate_as_array(
-        { workers => 1 },
+        { workers => 1, nowarn => 1 },
         sub {
             my ( $id, $job ) = @_;
             if ( ref $job ) {
