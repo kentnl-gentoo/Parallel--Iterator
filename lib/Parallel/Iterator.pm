@@ -1,3 +1,4 @@
+# $Id: Iterator.pm 2666 2007-10-02 22:04:36Z andy $
 package Parallel::Iterator;
 
 use warnings;
@@ -10,11 +11,14 @@ use Config;
 
 require 5.008;
 
-our $VERSION = '0.2.0';
+our $VERSION = '0.3.0';
 use base qw( Exporter );
 our @EXPORT_OK = qw( iterate iterate_as_array iterate_as_hash );
 
-my %DEFAULTS = ( workers => ( $Config{d_fork} ? 10 : 0 ) );
+my %DEFAULTS = (
+    workers => ( $Config{d_fork} ? 10 : 0 ),
+    onerror => 'die',
+);
 
 =head1 NAME
 
@@ -22,7 +26,7 @@ Parallel::Iterator - Simple parallel execution
 
 =head1 VERSION
 
-This document describes Parallel::Iterator version 0.2.0
+This document describes Parallel::Iterator version 0.3.0
 
 =head1 SYNOPSIS
 
@@ -105,7 +109,7 @@ Get an iterator for the list of URLs:
 
     my $url_iter = list_iter( @urls );
 
-Then get another iterator which will return the transformed results:
+Then wrap it in another iterator which will return the transformed results:
 
     my $page_iter = iterate( \&fetch, $url_iter );
 
@@ -212,6 +216,22 @@ The number of concurrent processes to launch. Set this to 0 to disable
 forking. Defaults to 10 on systems that support fork and 0 (disable
 forking) on those that do not.
 
+=item C<onerror>
+
+The action to take when an error is thrown in the iterator. Possible
+values are 'die', 'warn' or a reference to a subroutine that will be
+called with the index of the job that threw the exception and the value
+of C<$@> thrown.
+
+    iterate( {
+        onerror => sub {
+            my ($id, $err) = @_;
+            $self->log( "Error for index $id: $err" );
+        },
+        $worker,
+        \@jobs
+    );
+
 =back
 
 =cut
@@ -250,6 +270,13 @@ sub iterate {
         croak "Iterator must be a code, array or hash ref";
     }
 
+    if ( $options{onerror} =~ /^(die|warn)$/ ) {
+        $options{onerror} = eval "sub { shift; $1 shift }";
+    }
+
+    croak "onerror option must be 'die', 'warn' or a code reference"
+      unless 'CODE' eq ref $options{onerror};
+
     if ( $options{workers} > 0 && $DEFAULTS{workers} == 0 ) {
         warn "Fork not available, falling back to single process mode\n";
         $options{workers} = 0;
@@ -273,8 +300,7 @@ sub iterate {
 
         my @workers      = ();
         my @result_queue = ();
-        my $rdr_sel      = IO::Select->new;
-        my $wtr_sel      = IO::Select->new;
+        my $select       = IO::Select->new;
 
         # Possibly modify the iterator here...
 
@@ -293,13 +319,11 @@ sub iterate {
                     pipe $my_rdr, $child_wtr
                       or croak "Can't open read pipe ($!)\n";
 
-                    $rdr_sel->add( $my_rdr );
-                    $wtr_sel->add( $my_wtr );
+                    $select->add( [ $my_rdr, $my_wtr, 0 ] );
 
                     if ( my $pid = fork ) {
                         # Parent
                         close $_ for $child_rdr, $child_wtr;
-
                         push @workers, $pid;
                         _put_obj( \@next, $my_wtr );
                     }
@@ -308,51 +332,76 @@ sub iterate {
                         close $_ for $my_rdr, $my_wtr;
 
                         # Worker loop
-                        while ( defined( my $parcel = _get_obj( $child_rdr ) ) )
-                        {
-                            my $result = $worker->( @$parcel );
-                            _put_obj( [ $parcel->[0], $result ], $child_wtr );
+                        while ( defined( my $job = _get_obj( $child_rdr ) ) ) {
+                            my $result = eval { $worker->( @$job ) };
+                            my $err = $@;
+                            _put_obj(
+                                [
+                                    $err
+                                    ? ( 'E', $job->[0], $err )
+                                    : ( 'R', $job->[0], $result )
+                                ],
+                                $child_wtr
+                            );
                         }
 
                         # End of stream
                         _put_obj( undef, $child_wtr );
-
                         close $_ for $child_rdr, $child_wtr;
                         exit;
                     }
                 }
 
                 return @{ shift @result_queue } if @result_queue;
+                if ( $select->count ) {
+                    eval {
+                        my @rdr = $select->can_read;
+                        # Anybody got completed work?
+                        for my $r ( @rdr ) {
+                            my ( $rh, $wh, $eof ) = @$r;
+                            if ( defined( my $results = _get_obj( $rh ) ) ) {
+                                my $type = shift @$results;
+                                if ( $type eq 'R' ) {
+                                    push @result_queue, $results;
+                                }
+                                elsif ( $type eq 'E' ) {
+                                    $options{onerror}->( @$results );
+                                }
+                                else {
+                                    die "Bad result type: $type";
+                                }
 
-                if ( $rdr_sel->count || $wtr_sel->count ) {
-                    my ( $rdr, $wtr, $exc )
-                      = IO::Select->select( $rdr_sel, $wtr_sel, undef );
+                                unless ( $eof ) {
+                                    if ( my @next = $iter->() ) {
+                                        _put_obj( \@next, $wh );
+                                    }
+                                    else {
+                                        _put_obj( undef, $wh );
+                                        close $wh;
+                                        @{$r}[ 1, 2 ] = ( undef, 1 );
+                                    }
+                                }
+                            }
+                            else {
+                                $select->remove( $r );
+                                close $rh;
+                            }
+                        }
+                    };
 
-                    # Anybody got completed work?
-                    for my $r ( @$rdr ) {
-                        if ( defined( my $results = _get_obj( $r ) ) ) {
-                            push @result_queue, $results;
-                        }
-                        else {
-                            $rdr_sel->remove( $r );
-                            close $r;
-                        }
+                    if ( my $err = $@ ) {
+                        # Finish all the workers
+                        _put_obj( undef, $_->[1] ) for $select->handles;
+
+                        # And wait for them to exit
+                        waitpid( $_, 0 ) for @workers;
+
+                        # Rethrow
+                        die $err;
                     }
 
-                    # Anybody waiting for work?
-                    for my $w ( @$wtr ) {
-                        if ( my @next = $iter->() ) {
-                            _put_obj( \@next, $w );
-                        }
-                        else {
-                            _put_obj( undef, $w );
-                            $wtr_sel->remove( $w );
-                            close $w;
-                        }
-                    }
                     redo LOOP;
                 }
-
                 waitpid( $_, 0 ) for @workers;
                 return;
             }
