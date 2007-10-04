@@ -1,4 +1,4 @@
-# $Id: 010-basic.t 2679 2007-10-03 21:08:48Z andy $
+# $Id: 010-basic.t 2683 2007-10-04 12:35:06Z andy $
 use strict;
 use warnings;
 use Test::More tests => 13;
@@ -233,3 +233,5 @@ for my $workers ( 0, 1, 2, 10 ) {
     $iter->();
     like $warning[1], qr{Oops}, "warned OK";
 }
+
+1;

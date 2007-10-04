@@ -1,4 +1,4 @@
-# $Id: 020-data.t 2679 2007-10-03 21:08:48Z andy $
+# $Id: 020-data.t 2683 2007-10-04 12:35:06Z andy $
 use strict;
 use warnings;
 use Test::More tests => 1;
@@ -45,3 +45,5 @@ use Parallel::Iterator qw( iterate_as_array );
 
     is_deeply \@got, \@want, "data structure";
 }
+
+1;

@@ -1,17 +1,17 @@
-# $Id: Iterator.pm 2679 2007-10-03 21:08:48Z andy $
+# $Id: Iterator.pm 2684 2007-10-04 12:37:08Z andy $
 package Parallel::Iterator;
 
 use warnings;
 use strict;
 use Carp;
-use Storable qw( store_fd fd_retrieve );
+use Storable qw( store_fd fd_retrieve dclone );
 use IO::Handle;
 use IO::Select;
 use Config;
 
 require 5.008;
 
-our $VERSION = '0.4.0';
+our $VERSION = '0.5.0';
 use base qw( Exporter );
 our @EXPORT_OK = qw( iterate iterate_as_array iterate_as_hash );
 
@@ -27,7 +27,7 @@ Parallel::Iterator - Simple parallel execution
 
 =head1 VERSION
 
-This document describes Parallel::Iterator version 0.4.0
+This document describes Parallel::Iterator version 0.5.0
 
 =head1 SYNOPSIS
 
@@ -285,7 +285,6 @@ sub iterate {
       unless 'CODE' eq ref $options{onerror};
 
     if ( $options{workers} > 0 && $DEFAULTS{workers} == 0 ) {
-        # TODO: Add nowarn option.
         warn "Fork not available, falling back to single process mode\n"
           unless $options{nowarn};
         $options{workers} = 0;
@@ -296,7 +295,11 @@ sub iterate {
         return sub {
             while ( 1 ) {
                 if ( my @next = $iter->() ) {
-                    my $result = eval { $worker->( @next ) };
+                    my ( $id, $work ) = @next;
+                    # dclone so that we have the same semantics as the
+                    # forked version.
+                    $work = dclone $work if defined $work && ref $work;
+                    my $result = eval { $worker->( $id, $work ) };
                     if ( my $err = $@ ) {
                         $options{onerror}->( $next[0], $err );
                     }
