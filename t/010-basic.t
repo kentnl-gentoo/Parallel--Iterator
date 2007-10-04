@@ -1,4 +1,4 @@
-# $Id: 010-basic.t 2683 2007-10-04 12:35:06Z andy $
+# $Id: 010-basic.t 2698 2007-10-04 20:02:43Z andy $
 use strict;
 use warnings;
 use Test::More tests => 13;
