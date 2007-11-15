@@ -1,4 +1,4 @@
-# $Id: Iterator.pm 2742 2007-10-16 17:39:33Z andy $
+# $Id: Iterator.pm 2746 2007-10-19 16:36:50Z andy $
 package Parallel::Iterator;
 
 use warnings;
@@ -11,7 +11,7 @@ use Config;
 
 require 5.008;
 
-our $VERSION = '0.8.0';
+our $VERSION = '1.00';
 use base qw( Exporter );
 our @EXPORT_OK = qw( iterate iterate_as_array iterate_as_hash );
 
@@ -31,7 +31,7 @@ Parallel::Iterator - Simple parallel execution
 
 =head1 VERSION
 
-This document describes Parallel::Iterator version 0.8.0
+This document describes Parallel::Iterator version 1.00
 
 =head1 SYNOPSIS
 
@@ -267,8 +267,8 @@ forking) on those that do not.
 
 =item C<nowarn>
 
-Normally C<iterate> will issue a warning on systems on which fork is not
-available and fall back to single process mode. This option supresses
+Normally C<iterate> will issue a warning and fall back to single process
+mode on systems on which fork is not available. This option supresses
 that warning.
 
 =item C<batch>
@@ -276,6 +276,10 @@ that warning.
 Ordinarily items are passed to the worker one at a time. If you are
 processing a large number of items it may be more efficient to process
 them in batches. Specify the batch size using this option.
+
+Batching is transparent from the caller's perspective. Internally it
+modifies the iterators and worker (by wrapping them in additional
+closures) so that they pack, process and unpack chunks of work.
 
 =item C<adaptive>
 
@@ -431,7 +435,8 @@ sub _fork {
                     # End of stream
                     _put_obj( undef, $child_wtr );
                     close $_ for $child_rdr, $child_wtr;
-                    exit;
+                    # We use CORE::exit for MP compatibility
+                    CORE::exit;
                 }
             }
 
